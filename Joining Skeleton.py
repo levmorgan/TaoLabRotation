@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+#!/usr/bin/env python
+# coding: utf-8
+
 import os
 import pickle
 import numpy as np
@@ -11,35 +14,48 @@ from scipy import sparse, spatial
 
 
 def load_skels_from_dir(directory):
-    files = [os.path.join(directory, fi)
-             for fi in os.listdir(directory) if fi.endswith(".ply")]
-    skel1 = PlyData.read(files[0])
-    vertices = np.array(skel1["vertex"].data.tolist())
-    vertex_properties = vertices[:, [0, 1]]
-    vertices = vertices[:, 2:]
-    edges = np.array(skel1["edge"].data.tolist())
-    begin_verts = vertices[edges[:, 0], :]
-    end_verts = vertices[edges[:, 1], :]
-    vector_components = end_verts - begin_verts
+    pickle_path = os.path.join(directory, "parsed_graph.pickle")
 
-    G = nx.Graph()
-    G.add_edges_from(edges)
+    if os.path.exists(pickle_path):
+        with open(pickle_path, "rb") as fi:
+            print("Loading skeleton data from pickle")
+            vertices, edges, vertex_properties, G = pickle.load(fi)
+            return [vertices, edges, vertex_properties, G]
+    else:
+        print("Loading skeleton data from directory")
+        files = [os.path.join(directory, fi)
+                 for fi in os.listdir(directory) if fi.endswith(".ply")]
+        skel1 = PlyData.read(files[0])
+        vertices = np.array(skel1["vertex"].data.tolist())
+        vertex_properties = vertices[:, [0, 1]]
+        vertices = vertices[:, 2:]
+        edges = np.array(skel1["edge"].data.tolist())
+        begin_verts = vertices[edges[:, 0], :]
+        end_verts = vertices[edges[:, 1], :]
+        vector_components = end_verts - begin_verts
 
-    # Load a list of ply files
-    for fi in files[1:]:
-        skel = PlyData.read(fi)
-        _vertices = np.array(skel["vertex"].data.tolist())
-        _vertex_properties = _vertices[:, [0, 1]]
-        _vertices = _vertices[:, 2:]
-        _edges = np.array(skel["edge"].data.tolist())
+        # Load a list of ply files
+        for fi in files[1:]:
+            skel = PlyData.read(fi)
+            _vertices = np.array(skel["vertex"].data.tolist())
+            _vertex_properties = _vertices[:, [0, 1]]
+            _vertices = _vertices[:, 2:]
+            _edges = np.array(skel["edge"].data.tolist())
 
+            # Increment all the indices in edges so that they match up with the full vertex array
+            edges = np.concatenate([edges, (_edges + vertices.shape[0])], axis=0)
 
-        # Increment all the indices in edges so that they match up with the full vertex array
-        edges = np.concatenate([edges, (_edges + vertices.shape[0])], axis=0)
+            vertices = np.concatenate([vertices, _vertices], axis=0)
+            vertex_properties = np.concatenate([vertex_properties, _vertex_properties], axis=0)
 
-        vertices = np.concatenate([vertices, _vertices], axis=0)
-        vertex_properties = np.concatenate([vertex_properties, _vertex_properties], axis=0)
-    return [vertices, edges, vertex_properties]
+        G = nx.Graph()
+        G.add_edges_from(edges)
+
+        with open(pickle_path, "wb") as fi:
+            print("Writing skeleton data as pickle")
+            pickle.dump([vertices, edges, vertex_properties, G], fi)
+
+    return [vertices, edges, vertex_properties, G]
 
 
 def make_filtered_graph(_vertices, _vertex_properties, _edges, threshold):
@@ -154,12 +170,15 @@ def get_adjacent_points(center, vertices, side_length):
          vz >= (cz-half), vz <= (cz+half))), :]
     return selected
 
-SUBGRAPH_SIZE_THRESHOLD = 50
+# SUBGRAPH_SIZE_THRESHOLD = 50
+
+
+DIRECTORY = "brady129"
+DISTANCE = 30
+MIN_NEIGHBORS = 0
 
 print("Loading skeletons, creating graphs")
-vertices, edges, vertex_properties = load_skels_from_dir("brady125")
-G = nx.Graph()
-G.add_edges_from(edges)
+vertices, edges, vertex_properties, G = load_skels_from_dir(DIRECTORY)
 
 verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
 
@@ -173,12 +192,13 @@ root_verts = vertices[root_indices, :]
 root_degrees = np.array(G.degree(root_indices))
 root_leaves = root_degrees[root_degrees[:, 1] == 1, 0]
 leaf_verts = vertices[root_leaves, :]
+root_mean = np.mean(root_verts, axis=0)
 
-
-if os.path.exists("distance_matrix.pickle"):
-    print("Reading distance matrix from file")
-    with open("distance_matrix.pickle", "rb") as fi:
-        distance_matrix = pickle.load(fi)
+pickle_name = "distance_matrix_{}.pickle".format(DIRECTORY)
+if os.path.exists(pickle_name):
+    print("Reading distance matrix from file: {}".format(pickle_name))
+    with open(pickle_name, "rb") as fi:
+        distance_matrix, mst = pickle.load(fi)
 else:
     print("Calculating distance matrix:")
     non_root_indices = np.delete(np.arange(vertices.shape[0]), root_indices)
@@ -200,29 +220,33 @@ else:
     ct = 0
 
     print("Finding neighbors")
+    # TODO: Find the optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
     for leaf_idx, subgraph in end_indices_sub[end_indices_sub[:, 1] != 0, :]:
         leaf = vertices[leaf_idx, :]
         _end_indices = end_indices_sub[end_indices_sub[:, 1] != subgraph, 0]
         end_verts = verts_and_idx[_end_indices, :]
-        max_distance = 20
+        max_distance = DISTANCE
         neighbors = np.zeros((0, 0))
-        # while len(neighbors) < 2:
         neighbors = get_adjacent_points(leaf, end_verts, max_distance)
-        #         print("Got {} neighbors, max_distance={}".format(len(neighbors), max_distance))
-        max_distance = max_distance + 10
+        while len(neighbors) < MIN_NEIGHBORS:
+            neighbors = get_adjacent_points(leaf, end_verts, max_distance)
+            #         print("Got {} neighbors, max_distance={}".format(len(neighbors), max_distance))
+            max_distance = max_distance + 10
         leaf = leaf.reshape(1, -1)
+        # TODO: use elliptical distance here
         distances = spatial.distance_matrix(leaf, neighbors[:, :3])
         #     print(distances)
         distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
         ct = ct + 1
+        
+    print("Calculating MST")
+    weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
+    mst = nx.minimum_spanning_tree(weighted_G)
 
-    print("Writing distance matrix")
-    with open("distance_matrix.pickle", "wb") as fi:
-        pickle.dump(distance_matrix, fi)
+    print("Writing distance matrix and MST: {}".format(pickle_name))
+    with open(pickle_name, "wb") as fi:
+        pickle.dump([distance_matrix, mst], fi)
 
-print("Calculating MST")
-weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
-mst = nx.minimum_spanning_tree(weighted_G)
 
 mst_subgraphs = list(sorted(nx.connected_components(mst), key=len, reverse=True))
 root_mst = mst.subgraph(mst_subgraphs[0])
@@ -231,6 +255,15 @@ mst_edges = np.array(root_mst.edges)
 print("Plotting")
 mlab.clf()
 plot_edges(mst_edges, vertices)
-mlab.points3d(leaf_verts[:, 0], leaf_verts[:, 1], leaf_verts[:, 2], color=(1,0,0), scale_factor=2)
+
+
+root_edges = np.array(sG.edges)
+
+plot_edges(root_edges, vertices, color=(0,0,0), line_width=3.0)
+
+
+# plot_edges(mst_edges, vertices, line_width=4.0)
+# plot_edges(edges, vertices)
+# mlab.points3d(leaf_verts[:, 0], leaf_verts[:, 1], leaf_verts[:, 2], color=(1,0,0), scale_factor=2)
 
 mlab.show()
