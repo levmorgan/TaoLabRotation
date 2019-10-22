@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-#!/usr/bin/env python
+# !/usr/bin/env python
 # coding: utf-8
 
 import os
@@ -79,7 +79,7 @@ def make_filtered_graph(_vertices, _vertex_properties, _edges, threshold):
                   mode="2ddash", opacity=1.)
 
 
-def plot_subgraph(vertices, edges, vertex_properties, subgraph_no):
+def plot_subgraph_old(vertices, edges, vertex_properties, subgraph_no):
     _, subgraph_edges = get_subgraph(edges, subgraph_no)
     begin_verts = vertices[subgraph_edges[:, 0], :]
     end_verts = vertices[subgraph_edges[:, 1], :]
@@ -93,6 +93,22 @@ def plot_subgraph(vertices, edges, vertex_properties, subgraph_no):
                   vector_components[:, 1],
                   vector_components[:, 2], scalars=distances, mode="2ddash", opacity=1., scale_mode="scalar",
                   scale_factor=1, color=(1, 1, 1))
+
+
+def plot_subgraph(subgraph, vertices, points_kwargs={}, quiver_kwargs={}):
+    subgraph_edges = np.array(subgraph.edges)
+    begin_verts = vertices[subgraph_edges[:, 0], :]
+    end_verts = vertices[subgraph_edges[:, 1], :]
+    vector_components = end_verts - begin_verts
+    distances = np.sqrt(np.sum(np.square(end_verts - begin_verts), axis=1))
+    vertex_mask = np.unique(subgraph_edges.reshape((-1, 1)))
+
+    mlab.points3d(vertices[vertex_mask, 0], vertices[vertex_mask, 1], vertices[vertex_mask, 2],
+                  scale_mode='scalar', scale_factor=1, opacity=0.1, **points_kwargs)
+    mlab.quiver3d(begin_verts[:, 0], begin_verts[:, 1], begin_verts[:, 2], vector_components[:, 0],
+                  vector_components[:, 1],
+                  vector_components[:, 2], scalars=distances, mode="2ddash", opacity=1., scale_mode="scalar",
+                  scale_factor=1, **quiver_kwargs)
 
 
 def get_subgraph(edges, subgraph_no):
@@ -131,7 +147,7 @@ def get_skel_data(skel):
 
 def plot_edges(edges, vertices, **kwargs):
     plot_args = {"mode": "2ddash", "opacity": 1., "scale_mode": "scalar",
-                  "scale_factor": 1.}
+                 "scale_factor": 1.}
     plot_args.update(kwargs)
     begin_verts = vertices[edges[:, 0], :]
     end_verts = vertices[edges[:, 1], :]
@@ -140,14 +156,6 @@ def plot_edges(edges, vertices, **kwargs):
     return mlab.quiver3d(begin_verts[:, 0], begin_verts[:, 1], begin_verts[:, 2], vector_components[:, 0],
                          vector_components[:, 1],
                          vector_components[:, 2], scalars=distances, **plot_args)
-
-
-cycle1 = np.array(
-    [[118766, 118638], [118638, 269452], [269452, 118838], [118838, 269788], [269788, 118334], [118334, 269450],
-     [269450, 118682], [118682, 269451], [269451, 118713], [118713, 118844], [118844, 118840], [118840, 269837],
-     [269837, 118883], [118883, 269863], [269863, 118853], [118853, 269864], [269864, 118884], [118884, 269850],
-     [269850, 118855], [118855, 269760], [269760, 118850], [118850, 269849], [269849, 118836], [118836, 269851],
-     [269851, 118882], [118882, 269838], [269838, 118826], [118826, 269831], [269831, 118594], [118594, 118766]])
 
 
 # plot_subgraph(vertices, edges, vertex_properties, 0)
@@ -159,16 +167,104 @@ cycle1 = np.array(
 # plot_edges(cycle1, vertices, color=(1, 0, 0), line_width=10.0)
 
 def get_adjacent_points(center, vertices, side_length):
-    half = side_length/2.
+    half = side_length / 2.
     cx, cy, cz = center
     vx = vertices[:, 0]
     vy = vertices[:, 1]
     vz = vertices[:, 2]
     selected = vertices[np.logical_and.reduce(
-        (vx >= (cx-half), vx <= (cx+half),
-         vy >= (cy-half), vy <= (cy+half),
-         vz >= (cz-half), vz <= (cz+half))), :]
+        (vx >= (cx - half), vx <= (cx + half),
+         vy >= (cy - half), vy <= (cy + half),
+         vz >= (cz - half), vz <= (cz + half))), :]
     return selected
+
+
+def get_subgraph_vector(subgraph, vertices, mean_root_vert, get_distal_leaf=False):
+    degrees = np.array(subgraph.degree())
+    leaf_indices = degrees[degrees[:, 1] == np.min(degrees[:, 1]), 0]
+    leaf_verts = vertices[leaf_indices, :]
+    #     try:
+    distal_leaf = leaf_verts[np.argmax(spatial.distance.cdist(mean_root_vert, leaf_verts)), :]
+    #     except Exception as e:
+    #         print("Degrees: {}".format(degrees))
+    #         print("Leaf verts:\n{}".format(leaf_verts))
+    #         print("Leaf indices:\n{}".format(leaf_indices))
+    #         raise e
+    root_vector = np.mean(vertices[subgraph.nodes, :] - distal_leaf, axis=0)
+    norm = np.linalg.norm(root_vector)
+    if norm != 0:
+        root_vector = root_vector / norm
+    if not get_distal_leaf:
+        return root_vector.reshape([1, -1])
+    else:
+        return root_vector.reshape([1, -1]), distal_leaf.reshape([1, -1])
+
+ELLIPTICAL_DISTANCE_PLOT = False
+
+def get_elliptical_distance(s_verts, d_verts, alpha, vector):
+    # s_verts: m x 3
+    # d_verts: o x 3
+    # f(a,b): o x 1 x m x 3
+    d_verts_br = d_verts[:, None, None, :]
+
+    dxdxdz = d_verts_br - s_verts
+    if ELLIPTICAL_DISTANCE_PLOT:
+        vectors = dxdxdz[0,0,:,:]
+        norms = np.linalg.norm(vectors, axis=1)
+        print(s_verts)
+        print(vectors)
+        print(norms)
+
+        dest_vertex = d_verts[0, :].reshape([1, -1])
+        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:,2], color=(0,1,0))
+
+        mlab.quiver3d(s_verts[:, 0], s_verts[:, 1], s_verts[:, 2], vectors[:, 0],
+                         vectors[:, 1],
+                         vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
+
+    dx = dxdxdz[:, :, :, 0]
+    dy = dxdxdz[:, :, :, 1]
+    dz = dxdxdz[:, :, :, 2]
+    sq_distance = dx * dx + dy * dy + dz * dz
+
+    final_distance = np.sqrt(sq_distance -
+                             alpha * np.square((dx * vector[:, 0] + dy * vector[:, 1] + dz * vector[:, 2])))
+                             
+    final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
+    return final_distance
+
+def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vectors):
+    # s_verts: m x 3
+    # d_verts: o x 3
+    # f(a,b): o x 1 x m x 3
+    d_verts_br = d_verts[:, None, None, :]
+
+    dxdxdz = d_verts_br - s_verts
+    if ELLIPTICAL_DISTANCE_PLOT:
+        vectors = dxdxdz[0,0,:,:]
+        norms = np.linalg.norm(vectors, axis=1)
+        print(s_verts)
+        print(vectors)
+        print(norms)
+
+        dest_vertex = d_verts[0, :].reshape([1, -1])
+        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:,2], color=(0,1,0))
+
+        mlab.quiver3d(s_verts[:, 0], s_verts[:, 1], s_verts[:, 2], vectors[:, 0],
+                         vectors[:, 1],
+                         vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
+
+    dx = dxdxdz[:, :, :, 0]
+    dy = dxdxdz[:, :, :, 1]
+    dz = dxdxdz[:, :, :, 2]
+    sq_distance = dx * dx + dy * dy + dz * dz
+
+    final_distance = np.sqrt(sq_distance -
+                             alpha * np.square((dx * s_vectors[:, 0] + dy * s_vectors[:, 1] + dz * s_vectors[:, 2])) -
+                             beta * np.square((dx * d_vectors[:, 0] + dy * d_vectors[:, 1] + dz * d_vectors[:, 2])))
+    final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
+    return final_distance
+
 
 # SUBGRAPH_SIZE_THRESHOLD = 50
 
@@ -183,7 +279,9 @@ vertices, edges, vertex_properties, G = load_skels_from_dir(DIRECTORY)
 verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
 
 subgraphs = list(sorted(nx.connected_components(G), key=len, reverse=True))
-sG = G.subgraph(subgraphs[0])
+nx_subgraphs = [G.subgraph(subgraph) for subgraph in subgraphs]
+sG = nx_subgraphs[0]
+
 # root_edges = np.array(sG.edges)
 
 # root_indices = np.unique(root_edges.copy().flatten())
@@ -192,7 +290,27 @@ root_verts = vertices[root_indices, :]
 root_degrees = np.array(G.degree(root_indices))
 root_leaves = root_degrees[root_degrees[:, 1] == 1, 0]
 leaf_verts = vertices[root_leaves, :]
-root_mean = np.mean(root_verts, axis=0)
+root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
+
+subgraph_vectors = [get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]]
+
+mean_root_vert = np.average(root_verts, axis=0).reshape((1, 3))
+
+# mlab.clf()
+# sg1 = G.subgraph(subgraphs[4200])
+# sg2 = G.subgraph(subgraphs[4201])
+# plot_subgraph(sg1, vertices)
+# plot_subgraph(sg2, vertices)
+# s_vector, distal_leaf = get_subgraph_vector(sg1, vertices, mean_root_vert, get_distal_leaf=True)
+# d_vector = get_subgraph_vector(sg2, vertices, mean_root_vert)
+# 
+# s_verts = vertices[sg1.nodes, :]
+# d_verts = vertices[sg2.nodes, :]
+# distances = get_elliptical_distance(s_verts, d_verts, 0.8, s_vector, 0.8, d_vector)
+# print(spatial.distance.cdist(s_verts, d_verts))
+# print(distances)
+# mlab.show()
+
 
 pickle_name = "distance_matrix_{}.pickle".format(DIRECTORY)
 if os.path.exists(pickle_name):
@@ -234,11 +352,14 @@ else:
             max_distance = max_distance + 10
         leaf = leaf.reshape(1, -1)
         # TODO: use elliptical distance here
-        distances = spatial.distance_matrix(leaf, neighbors[:, :3])
+        # distances = spatial.distance_matrix(leaf, neighbors[:, :3])
         #     print(distances)
+        sg_vector = get_subgraph_vector(G.subgraph(subgraphs[subgraph]), vertices, mean_root_vert=root_mean)
+        #         print(sg_vector.shape)
+        distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
         distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
         ct = ct + 1
-        
+
     print("Calculating MST")
     weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
     mst = nx.minimum_spanning_tree(weighted_G)
@@ -246,7 +367,6 @@ else:
     print("Writing distance matrix and MST: {}".format(pickle_name))
     with open(pickle_name, "wb") as fi:
         pickle.dump([distance_matrix, mst], fi)
-
 
 mst_subgraphs = list(sorted(nx.connected_components(mst), key=len, reverse=True))
 root_mst = mst.subgraph(mst_subgraphs[0])
@@ -256,14 +376,25 @@ print("Plotting")
 mlab.clf()
 plot_edges(mst_edges, vertices)
 
-
 root_edges = np.array(sG.edges)
-
-plot_edges(root_edges, vertices, color=(0,0,0), line_width=3.0)
-
-
-# plot_edges(mst_edges, vertices, line_width=4.0)
-# plot_edges(edges, vertices)
-# mlab.points3d(leaf_verts[:, 0], leaf_verts[:, 1], leaf_verts[:, 2], color=(1,0,0), scale_factor=2)
+plot_edges(root_edges, vertices, color=(0, 0, 0), line_width=3.0)
 
 mlab.show()
+
+# mlab.clf()
+#
+# subgraph = G.subgraph(subgraphs[4200])
+# subgraph_edges = np.array(subgraph.edges)
+# plot_subgraph(subgraph, vertices)
+#
+# root_vector, distal_leaf = get_subgraph_vector_1(subgraph, vertices, mean_root_vert)
+#
+# mlab.quiver3d(distal_leaf[:, 0], distal_leaf[:, 1], distal_leaf[:, 2], vector[:, 0],
+#               vector[:, 1],
+#               vector[:, 2], scalars=np.array([20]))
+# mlab.show()
+
+# In[ ]:
+
+if False:
+    os.unlink(pickle_name)
