@@ -233,6 +233,7 @@ def get_elliptical_distance(s_verts, d_verts, alpha, vector):
     final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
     return final_distance
 
+
 def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vectors):
     # s_verts: m x 3
     # d_verts: o x 3
@@ -265,26 +266,14 @@ def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vecto
     final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
     return final_distance
 
-
-# SUBGRAPH_SIZE_THRESHOLD = 50
+def link_by_steiner(directory):
+    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx = \
+        get_graph_data(directory)
 
 def link_by_distance(directory, max_distance, min_neighbors=0):
     print("Loading skeletons, creating graphs")
-    vertices, edges, vertex_properties, G = load_skels_from_dir(directory)
-    verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
-    subgraphs = list(sorted(nx.connected_components(G), key=len, reverse=True))
-    nx_subgraphs = [G.subgraph(subgraph) for subgraph in subgraphs]
-    sG = nx_subgraphs[0]
-    # root_edges = np.array(sG.edges)
-    # root_indices = np.unique(root_edges.copy().flatten())
-    root_indices = sG.nodes
-    root_verts = vertices[root_indices, :]
-    root_degrees = np.array(G.degree(root_indices))
-    root_leaves = root_degrees[root_degrees[:, 1] == 1, 0]
-    leaf_verts = vertices[root_leaves, :]
-    root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
-    subgraph_vectors = [get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]]
-    mean_root_vert = np.average(root_verts, axis=0).reshape((1, 3))
+    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx = \
+        get_graph_data(directory)
     pickle_name = "distance_matrix_{}.pickle".format(directory)
     if os.path.exists(pickle_name):
         print("Reading distance matrix from file: {}".format(pickle_name))
@@ -292,13 +281,11 @@ def link_by_distance(directory, max_distance, min_neighbors=0):
             distance_matrix, mst = pickle.load(fi)
     else:
         print("Calculating distance matrix:")
-        non_root_indices = np.delete(np.arange(vertices.shape[0]), root_indices)
         nrG = G.subgraph(item for subgraph in subgraphs[1:] for item in subgraph)
 
         print("Finding connected component leaves")
         nr_degrees = np.array(nrG.degree())
         nr_leaf_indices = nr_degrees[nr_degrees[:, 1] == 1, 0]
-        # nr_leaf_vertices = vertices[nr_leaf_indices, :]
 
         indices_by_subgraph = np.array([[item, idx] for idx, subgraph in enumerate(subgraphs) for item in subgraph])
         end_indices = np.concatenate([nr_leaf_indices, root_indices])
@@ -311,7 +298,7 @@ def link_by_distance(directory, max_distance, min_neighbors=0):
         ct = 0
 
         print("Finding neighbors")
-        # TODO: Find the optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
+        # TODO: Find optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
         for leaf_idx, subgraph in end_indices_sub[end_indices_sub[:, 1] != 0, :]:
             leaf = vertices[leaf_idx, :]
             _end_indices = end_indices_sub[end_indices_sub[:, 1] != subgraph, 0]
@@ -324,8 +311,15 @@ def link_by_distance(directory, max_distance, min_neighbors=0):
                 _max_distance = _max_distance + 10
             leaf = leaf.reshape(1, -1)
 
-            sg_vector = get_subgraph_vector(G.subgraph(subgraphs[subgraph]), vertices, mean_root_vert=root_mean)
-            distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
+            if not BIDIRECTIONAL_DISTANCE:
+                sg_vector = subgraph_vectors[subgraph]
+                distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
+            else:
+                sg_vector = subgraph_vectors[subgraph]
+                d_vectors = subgraph_vectors[:, 3]
+                distances = get_elliptical_distance_bi(leaf, neighbors[:, :3], alpha=0.8, s_vectors=sg_vector,
+                                                       beta=0.8, d_vectors=d_vectors)
+
             distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
             ct = ct + 1
 
@@ -342,15 +336,29 @@ def link_by_distance(directory, max_distance, min_neighbors=0):
     print("Plotting")
     mlab.clf()
     plot_edges(mst_edges, vertices)
-    root_edges = np.array(sG.edges)
+    root_edges = np.array(root_subgraph.edges)
     plot_edges(root_edges, vertices, color=(0, 0, 0), line_width=3.0)
     mlab.show()
+
+
+def get_graph_data(directory):
+    vertices, edges, vertex_properties, G = load_skels_from_dir(directory)
+    verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
+    subgraphs = list(sorted(nx.connected_components(G), key=len, reverse=True))
+    nx_subgraphs = [G.subgraph(subgraph) for subgraph in subgraphs]
+    root_subgraph = nx_subgraphs[0]
+    root_indices = root_subgraph.nodes
+    root_verts = vertices[root_indices, :]
+    root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
+    subgraph_vectors = np.array([get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]])
+    return G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx
 
 
 if __name__ == "__main__":
     DIRECTORY = "brady129"
     MAX_DISTANCE = 30
     MIN_NEIGHBORS = 0
+    BIDIRECTIONAL_DISTANCE = False
 
     link_by_distance(DIRECTORY, MAX_DISTANCE, MIN_NEIGHBORS)
 
