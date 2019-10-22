@@ -70,7 +70,7 @@ def make_filtered_graph(_vertices, _vertex_properties, _edges, threshold):
     filtered_vector_components = filtered_end_verts - filtered_begin_verts
     filtered_distances = np.sqrt(np.sum(np.square(filtered_end_verts - filtered_begin_verts), axis=1))
     mlab.points3d(filtered_verts[:, 0], filtered_verts[:, 1], filtered_verts[:, 2],
-                  np.sqrt(vertex_properties[vertex_filter, 1]),
+                  np.sqrt(_vertex_properties[vertex_filter, 1]),
                   opacity=0.1)
 
     mlab.quiver3d(filtered_begin_verts[:, 0], filtered_begin_verts[:, 1], filtered_begin_verts[:, 2],
@@ -268,133 +268,91 @@ def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vecto
 
 # SUBGRAPH_SIZE_THRESHOLD = 50
 
+def link_by_distance(directory, max_distance, min_neighbors=0):
+    print("Loading skeletons, creating graphs")
+    vertices, edges, vertex_properties, G = load_skels_from_dir(directory)
+    verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
+    subgraphs = list(sorted(nx.connected_components(G), key=len, reverse=True))
+    nx_subgraphs = [G.subgraph(subgraph) for subgraph in subgraphs]
+    sG = nx_subgraphs[0]
+    # root_edges = np.array(sG.edges)
+    # root_indices = np.unique(root_edges.copy().flatten())
+    root_indices = sG.nodes
+    root_verts = vertices[root_indices, :]
+    root_degrees = np.array(G.degree(root_indices))
+    root_leaves = root_degrees[root_degrees[:, 1] == 1, 0]
+    leaf_verts = vertices[root_leaves, :]
+    root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
+    subgraph_vectors = [get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]]
+    mean_root_vert = np.average(root_verts, axis=0).reshape((1, 3))
+    pickle_name = "distance_matrix_{}.pickle".format(directory)
+    if os.path.exists(pickle_name):
+        print("Reading distance matrix from file: {}".format(pickle_name))
+        with open(pickle_name, "rb") as fi:
+            distance_matrix, mst = pickle.load(fi)
+    else:
+        print("Calculating distance matrix:")
+        non_root_indices = np.delete(np.arange(vertices.shape[0]), root_indices)
+        nrG = G.subgraph(item for subgraph in subgraphs[1:] for item in subgraph)
 
-DIRECTORY = "brady129"
-DISTANCE = 30
-MIN_NEIGHBORS = 0
+        print("Finding connected component leaves")
+        nr_degrees = np.array(nrG.degree())
+        nr_leaf_indices = nr_degrees[nr_degrees[:, 1] == 1, 0]
+        # nr_leaf_vertices = vertices[nr_leaf_indices, :]
 
-print("Loading skeletons, creating graphs")
-vertices, edges, vertex_properties, G = load_skels_from_dir(DIRECTORY)
+        indices_by_subgraph = np.array([[item, idx] for idx, subgraph in enumerate(subgraphs) for item in subgraph])
+        end_indices = np.concatenate([nr_leaf_indices, root_indices])
+        end_indices_sub = indices_by_subgraph[np.isin(indices_by_subgraph, end_indices)[:, 0], :]
 
-verts_and_idx = np.hstack([vertices, np.arange(len(vertices)).reshape(-1, 1)])
+        distance_matrix = sparse.lil_matrix((vertices.shape[0], vertices.shape[0]))
 
-subgraphs = list(sorted(nx.connected_components(G), key=len, reverse=True))
-nx_subgraphs = [G.subgraph(subgraph) for subgraph in subgraphs]
-sG = nx_subgraphs[0]
+        distance_matrix[edges[:, 0], edges[:, 1]] = 10 ^ -6
 
-# root_edges = np.array(sG.edges)
+        ct = 0
 
-# root_indices = np.unique(root_edges.copy().flatten())
-root_indices = sG.nodes
-root_verts = vertices[root_indices, :]
-root_degrees = np.array(G.degree(root_indices))
-root_leaves = root_degrees[root_degrees[:, 1] == 1, 0]
-leaf_verts = vertices[root_leaves, :]
-root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
+        print("Finding neighbors")
+        # TODO: Find the optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
+        for leaf_idx, subgraph in end_indices_sub[end_indices_sub[:, 1] != 0, :]:
+            leaf = vertices[leaf_idx, :]
+            _end_indices = end_indices_sub[end_indices_sub[:, 1] != subgraph, 0]
+            end_verts = verts_and_idx[_end_indices, :]
+            _max_distance = max_distance
 
-subgraph_vectors = [get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]]
+            neighbors = get_adjacent_points(leaf, end_verts, _max_distance)
+            while len(neighbors) < min_neighbors:
+                neighbors = get_adjacent_points(leaf, end_verts, _max_distance)
+                _max_distance = _max_distance + 10
+            leaf = leaf.reshape(1, -1)
 
-mean_root_vert = np.average(root_verts, axis=0).reshape((1, 3))
+            sg_vector = get_subgraph_vector(G.subgraph(subgraphs[subgraph]), vertices, mean_root_vert=root_mean)
+            distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
+            distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
+            ct = ct + 1
 
-# mlab.clf()
-# sg1 = G.subgraph(subgraphs[4200])
-# sg2 = G.subgraph(subgraphs[4201])
-# plot_subgraph(sg1, vertices)
-# plot_subgraph(sg2, vertices)
-# s_vector, distal_leaf = get_subgraph_vector(sg1, vertices, mean_root_vert, get_distal_leaf=True)
-# d_vector = get_subgraph_vector(sg2, vertices, mean_root_vert)
-# 
-# s_verts = vertices[sg1.nodes, :]
-# d_verts = vertices[sg2.nodes, :]
-# distances = get_elliptical_distance(s_verts, d_verts, 0.8, s_vector, 0.8, d_vector)
-# print(spatial.distance.cdist(s_verts, d_verts))
-# print(distances)
-# mlab.show()
+        print("Calculating MST")
+        weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
+        mst = nx.minimum_spanning_tree(weighted_G)
+
+        print("Writing distance matrix and MST: {}".format(pickle_name))
+        with open(pickle_name, "wb") as fi:
+            pickle.dump([distance_matrix, mst], fi)
+    mst_subgraphs = list(sorted(nx.connected_components(mst), key=len, reverse=True))
+    root_mst = mst.subgraph(mst_subgraphs[0])
+    mst_edges = np.array(root_mst.edges)
+    print("Plotting")
+    mlab.clf()
+    plot_edges(mst_edges, vertices)
+    root_edges = np.array(sG.edges)
+    plot_edges(root_edges, vertices, color=(0, 0, 0), line_width=3.0)
+    mlab.show()
 
 
-pickle_name = "distance_matrix_{}.pickle".format(DIRECTORY)
-if os.path.exists(pickle_name):
-    print("Reading distance matrix from file: {}".format(pickle_name))
-    with open(pickle_name, "rb") as fi:
-        distance_matrix, mst = pickle.load(fi)
-else:
-    print("Calculating distance matrix:")
-    non_root_indices = np.delete(np.arange(vertices.shape[0]), root_indices)
-    nrG = G.subgraph(item for subgraph in subgraphs[1:] for item in subgraph)
+if __name__ == "__main__":
+    DIRECTORY = "brady129"
+    MAX_DISTANCE = 30
+    MIN_NEIGHBORS = 0
 
-    print("Finding connected component leaves")
-    nr_degrees = np.array(nrG.degree())
-    nr_leaf_indices = nr_degrees[nr_degrees[:, 1] == 1, 0]
-    # nr_leaf_vertices = vertices[nr_leaf_indices, :]
+    link_by_distance(DIRECTORY, MAX_DISTANCE, MIN_NEIGHBORS)
 
-    indices_by_subgraph = np.array([[item, idx] for idx, subgraph in enumerate(subgraphs) for item in subgraph])
-    end_indices = np.concatenate([nr_leaf_indices, root_indices])
-    end_indices_sub = indices_by_subgraph[np.isin(indices_by_subgraph, end_indices)[:, 0], :]
-
-    distance_matrix = sparse.lil_matrix((vertices.shape[0], vertices.shape[0]))
-
-    distance_matrix[edges[:, 0], edges[:, 1]] = 10 ^ -6
-
-    ct = 0
-
-    print("Finding neighbors")
-    # TODO: Find the optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
-    for leaf_idx, subgraph in end_indices_sub[end_indices_sub[:, 1] != 0, :]:
-        leaf = vertices[leaf_idx, :]
-        _end_indices = end_indices_sub[end_indices_sub[:, 1] != subgraph, 0]
-        end_verts = verts_and_idx[_end_indices, :]
-        max_distance = DISTANCE
-        neighbors = np.zeros((0, 0))
-        neighbors = get_adjacent_points(leaf, end_verts, max_distance)
-        while len(neighbors) < MIN_NEIGHBORS:
-            neighbors = get_adjacent_points(leaf, end_verts, max_distance)
-            #         print("Got {} neighbors, max_distance={}".format(len(neighbors), max_distance))
-            max_distance = max_distance + 10
-        leaf = leaf.reshape(1, -1)
-        # TODO: use elliptical distance here
-        # distances = spatial.distance_matrix(leaf, neighbors[:, :3])
-        #     print(distances)
-        sg_vector = get_subgraph_vector(G.subgraph(subgraphs[subgraph]), vertices, mean_root_vert=root_mean)
-        #         print(sg_vector.shape)
-        distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
-        distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
-        ct = ct + 1
-
-    print("Calculating MST")
-    weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
-    mst = nx.minimum_spanning_tree(weighted_G)
-
-    print("Writing distance matrix and MST: {}".format(pickle_name))
-    with open(pickle_name, "wb") as fi:
-        pickle.dump([distance_matrix, mst], fi)
-
-mst_subgraphs = list(sorted(nx.connected_components(mst), key=len, reverse=True))
-root_mst = mst.subgraph(mst_subgraphs[0])
-mst_edges = np.array(root_mst.edges)
-
-print("Plotting")
-mlab.clf()
-plot_edges(mst_edges, vertices)
-
-root_edges = np.array(sG.edges)
-plot_edges(root_edges, vertices, color=(0, 0, 0), line_width=3.0)
-
-mlab.show()
-
-# mlab.clf()
-#
-# subgraph = G.subgraph(subgraphs[4200])
-# subgraph_edges = np.array(subgraph.edges)
-# plot_subgraph(subgraph, vertices)
-#
-# root_vector, distal_leaf = get_subgraph_vector_1(subgraph, vertices, mean_root_vert)
-#
-# mlab.quiver3d(distal_leaf[:, 0], distal_leaf[:, 1], distal_leaf[:, 2], vector[:, 0],
-#               vector[:, 1],
-#               vector[:, 2], scalars=np.array([20]))
-# mlab.show()
-
-# In[ ]:
-
-if False:
-    os.unlink(pickle_name)
+    if False:
+        os.unlink(pickle_name)
