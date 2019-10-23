@@ -266,13 +266,52 @@ def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vecto
     final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
     return final_distance
 
+
+def get_best_edge_between_subgraphs(subgraph_s, subgraph_d, s_vector, verts_and_idx):
+    # Get nodes with smallest distance between them and the distance
+    s_verts = verts_and_idx[subgraph_s.nodes, :]
+    d_verts = verts_and_idx[subgraph_d.nodes, :]
+
+    distances = get_elliptical_distance(s_verts, d_verts, 0.8, s_vector)
+    min_distance_idx = np.unravel_index(distances.argmin(), distances.shape)
+    min_distance_edge = (s_verts[min_distance_idx[0], 3], d_verts[min_distance_idx[1], 3], distances[min_distance_idx])
+
+    return min_distance_edge
+
+
 def link_by_steiner(directory):
-    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx = \
+    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx = \
         get_graph_data(directory)
+
+    pickle_name = "distance_matrix_{}_alpha_0.8.pickle".format(DIRECTORY)
+    if not os.path.exists(pickle_name):
+        subgraph_node_edges = np.zeros((len(subgraphs), len(subgraphs), 3))
+
+        # Find shortest path between subgraphs
+        for i, subgraph in enumerate(subgraphs):
+            # Skip the root graph
+            if i == 0:
+                continue
+            s_vector = subgraph_vectors[i]
+            _subgraph = nx_subgraphs[i]
+            best_edges = np.array(
+                [get_best_edge_between_subgraphs(_subgraph, subgraph, s_vector, verts_and_idx) for subgraph in nx_subgraphs])
+            subgraph_node_edges[i, :, :] = best_edges
+
+        with open(pickle_name, "wb") as pickle_fi:
+            pickle.dump(subgraph_node_edges, pickle_fi)
+    else:
+        with open(pickle_name, "rb") as pickle_fi:
+            subgraph_node_edges = pickle.load(pickle_fi)
+
+    distance_matrix = subgraph_node_edges[:, :, 3]
+
+
+
 
 def link_by_distance(directory, max_distance, min_neighbors=0):
     print("Loading skeletons, creating graphs")
-    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx = \
+    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx = \
         get_graph_data(directory)
     pickle_name = "distance_matrix_{}.pickle".format(directory)
     if os.path.exists(pickle_name):
@@ -351,7 +390,7 @@ def get_graph_data(directory):
     root_verts = vertices[root_indices, :]
     root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
     subgraph_vectors = np.array([get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]])
-    return G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, vertices, verts_and_idx
+    return G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx
 
 
 if __name__ == "__main__":
