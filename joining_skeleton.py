@@ -6,11 +6,23 @@
 
 import os
 import pickle
+import datetime
+
 import numpy as np
 from mayavi import mlab
 from plyfile import PlyData
 import networkx as nx
 from scipy import sparse, spatial
+
+ELLIPTICAL_DISTANCE_PLOT = False
+
+
+def cartesian_product(x, y):
+    return np.transpose([np.repeat(y, len(x)), np.tile(x, len(y))])
+
+
+def log_print(string):
+    print("{}: {}".format(datetime.datetime.now(), string))
 
 
 def load_skels_from_dir(directory):
@@ -18,11 +30,11 @@ def load_skels_from_dir(directory):
 
     if os.path.exists(pickle_path):
         with open(pickle_path, "rb") as fi:
-            print("Loading skeleton data from pickle")
+            log_print("Loading skeleton data from pickle")
             vertices, edges, vertex_properties, G = pickle.load(fi)
             return [vertices, edges, vertex_properties, G]
     else:
-        print("Loading skeleton data from directory")
+        log_print("Loading skeleton data from directory")
         files = [os.path.join(directory, fi)
                  for fi in os.listdir(directory) if fi.endswith(".ply")]
         skel1 = PlyData.read(files[0])
@@ -52,7 +64,7 @@ def load_skels_from_dir(directory):
         G.add_edges_from(edges)
 
         with open(pickle_path, "wb") as fi:
-            print("Writing skeleton data as pickle")
+            log_print("Writing skeleton data as pickle")
             pickle.dump([vertices, edges, vertex_properties, G], fi)
 
     return [vertices, edges, vertex_properties, G]
@@ -157,15 +169,6 @@ def plot_edges(edges, vertices, **kwargs):
                          vector_components[:, 1],
                          vector_components[:, 2], scalars=distances, **plot_args)
 
-
-# plot_subgraph(vertices, edges, vertex_properties, 0)
-
-# skel1 = PlyData.read("v2highres_skel.ply")
-# vertices, edges, vertex_properties = get_skel_data(skel1)
-# # plot_skeleton(skel1)
-# plot_edges(edges, vertices)
-# plot_edges(cycle1, vertices, color=(1, 0, 0), line_width=10.0)
-
 def get_adjacent_points(center, vertices, side_length):
     half = side_length / 2.
     cx, cy, cz = center
@@ -186,9 +189,9 @@ def get_subgraph_vector(subgraph, vertices, mean_root_vert, get_distal_leaf=Fals
     #     try:
     distal_leaf = leaf_verts[np.argmax(spatial.distance.cdist(mean_root_vert, leaf_verts)), :]
     #     except Exception as e:
-    #         print("Degrees: {}".format(degrees))
-    #         print("Leaf verts:\n{}".format(leaf_verts))
-    #         print("Leaf indices:\n{}".format(leaf_indices))
+    #         log_print("Degrees: {}".format(degrees))
+    #         log_print("Leaf verts:\n{}".format(leaf_verts))
+    #         log_print("Leaf indices:\n{}".format(leaf_indices))
     #         raise e
     root_vector = np.mean(vertices[subgraph.nodes, :] - distal_leaf, axis=0)
     norm = np.linalg.norm(root_vector)
@@ -199,7 +202,6 @@ def get_subgraph_vector(subgraph, vertices, mean_root_vert, get_distal_leaf=Fals
     else:
         return root_vector.reshape([1, -1]), distal_leaf.reshape([1, -1])
 
-ELLIPTICAL_DISTANCE_PLOT = False
 
 def get_elliptical_distance(s_verts, d_verts, alpha, vector):
     # s_verts: m x 3
@@ -209,27 +211,34 @@ def get_elliptical_distance(s_verts, d_verts, alpha, vector):
 
     dxdxdz = d_verts_br - s_verts
     if ELLIPTICAL_DISTANCE_PLOT:
-        vectors = dxdxdz[0,0,:,:]
+        vectors = dxdxdz[0, 0, :, :]
         norms = np.linalg.norm(vectors, axis=1)
-        print(s_verts)
-        print(vectors)
-        print(norms)
+        log_print(s_verts)
+        log_print(vectors)
+        log_print(norms)
 
         dest_vertex = d_verts[0, :].reshape([1, -1])
-        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:,2], color=(0,1,0))
+        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:, 2], color=(0, 1, 0))
 
         mlab.quiver3d(s_verts[:, 0], s_verts[:, 1], s_verts[:, 2], vectors[:, 0],
-                         vectors[:, 1],
-                         vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
+                      vectors[:, 1],
+                      vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
 
     dx = dxdxdz[:, :, :, 0]
     dy = dxdxdz[:, :, :, 1]
     dz = dxdxdz[:, :, :, 2]
     sq_distance = dx * dx + dy * dy + dz * dz
 
-    final_distance = np.sqrt(sq_distance -
+    final_distance = np.sqrt(sq_distance +
                              alpha * np.square((dx * vector[:, 0] + dy * vector[:, 1] + dz * vector[:, 2])))
-                             
+
+    lt0 = final_distance < 0
+    if np.any(lt0):
+        log_print("PROBLEM! Got final_distance < 0:")
+        nonzeros = np.nonzero(lt0)
+        log_print(np.vstack([nonzeros[0], nonzeros[1], final_distance[lt0]]).transpose())
+        raise ValueError()
+
     final_distance = np.transpose(final_distance.reshape(d_verts.shape[0], s_verts.shape[0]))
     return final_distance
 
@@ -242,18 +251,18 @@ def get_elliptical_distance_bi(s_verts, d_verts, alpha, s_vectors, beta, d_vecto
 
     dxdxdz = d_verts_br - s_verts
     if ELLIPTICAL_DISTANCE_PLOT:
-        vectors = dxdxdz[0,0,:,:]
+        vectors = dxdxdz[0, 0, :, :]
         norms = np.linalg.norm(vectors, axis=1)
-        print(s_verts)
-        print(vectors)
-        print(norms)
+        log_print(s_verts)
+        log_print(vectors)
+        log_print(norms)
 
         dest_vertex = d_verts[0, :].reshape([1, -1])
-        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:,2], color=(0,1,0))
+        mlab.points3d(dest_vertex[:, 0], dest_vertex[:, 1], dest_vertex[:, 2], color=(0, 1, 0))
 
         mlab.quiver3d(s_verts[:, 0], s_verts[:, 1], s_verts[:, 2], vectors[:, 0],
-                         vectors[:, 1],
-                         vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
+                      vectors[:, 1],
+                      vectors[:, 2], scalars=norms, scale_mode="scalar", scale_factor=1, line_width=5)
 
     dx = dxdxdz[:, :, :, 0]
     dy = dxdxdz[:, :, :, 1]
@@ -283,62 +292,151 @@ def link_by_steiner(directory):
     G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx = \
         get_graph_data(directory)
 
-    pickle_name = "distance_matrix_{}_alpha_0.8.pickle".format(DIRECTORY)
-    if not os.path.exists(pickle_name):
-        subgraph_node_edges = np.zeros((len(subgraphs), len(subgraphs), 3))
+    log_print("Setting up matrices")
+    matrix_name = "edge_matrix_steiner_{}_alpha_0.8".format(DIRECTORY)
+    # For coordinate [x, y, :], subgraph_node_edges should give the triple:
+    # [closest node in x to y, closest node in y to x, distance between the two nodes]
+    subgraph_node_edges = np.zeros((len(subgraphs), len(subgraphs), 3))
+    node_deg_sg = np.array(
+        [[row[0], row[1], idx] for idx, table in enumerate(subgraph.degree for subgraph in nx_subgraphs)
+         for row in table])
+    leaf_nodes = node_deg_sg[node_deg_sg[:, 1] == 1, :]
+    leaf_nodes = leaf_nodes[:, (0, 2)]
+    subgraph_lens = np.array([len(subgraph) for subgraph in subgraphs])
+    if os.path.exists(matrix_name+".npy"):
+        log_print("Loading best nodes and distance matrix")
+        subgraph_node_edges = np.load(matrix_name+".npy")
+    else:
+        # Find shortest path between all subgraphs
+        # Allow distances from larger subgraphs to overwrite smaller.
+        # Small subgraphs have bad vectors, so skip them.
+        log_print("Finding optimal paths among all connected components")
+        good_subgraphs = reversed(list(np.nonzero(subgraph_lens > 5)[0]))
 
-        # Find shortest path between subgraphs
-        for i, subgraph in enumerate(subgraphs):
+        for i in good_subgraphs:
             # Skip the root graph
             if i == 0:
                 continue
+            s_inds = leaf_nodes[leaf_nodes[:, 1] == i, 0]
+
+            # If the subgraph has no leaf nodes, it's a loop. Skip it.
+            if s_inds.size == 0:
+                continue
+
             s_vector = subgraph_vectors[i]
-            _subgraph = nx_subgraphs[i]
-            best_edges = np.array(
-                [get_best_edge_between_subgraphs(_subgraph, subgraph, s_vector, verts_and_idx) for subgraph in nx_subgraphs])
-            subgraph_node_edges[i, :, :] = best_edges
+            s_verts = vertices[s_inds, :]
+            d_leaves = leaf_nodes[leaf_nodes[:, 1] != i, :]
+            d_inds = d_leaves[:, 0]
+            d_verts = vertices[d_inds, :]
 
-        with open(pickle_name, "wb") as pickle_fi:
-            pickle.dump(subgraph_node_edges, pickle_fi)
-    else:
-        with open(pickle_name, "rb") as pickle_fi:
-            subgraph_node_edges = pickle.load(pickle_fi)
+            distances = get_elliptical_distance(s_verts, d_verts, alpha=0.8,
+                                                vector=s_vector)
 
-    distance_matrix = subgraph_node_edges[:, :, 3]
+            best_dists = np.zeros(len(subgraphs))
+            best_edges = np.zeros((len(subgraphs), 2))
+            dist_table = distances.view().transpose()
+
+            # Iterate over the table, finding the shortest path for each subgraph.
+            # I tried iterating over each subgraph and doing a 2D argmin, but it was slower! Weird, huh?
+            for row_idx in range(dist_table.shape[0]):
+                d_idx, d_sg = d_leaves[row_idx, :].astype(int)
+                best_col = np.argmin(dist_table[row_idx, :])
+                best_s_idx = s_inds[best_col]
+                best_dist = dist_table[row_idx, best_col]
+                if best_dist < best_dists[d_sg] or best_dists[d_sg] == 0:
+                    best_dists[d_sg] = best_dist
+                    best_edges[d_sg] = [best_s_idx, d_idx]
+            subgraph_node_edges[i, :, :] = np.hstack([best_edges, best_dists.reshape(-1, 1)])
+            subgraph_node_edges[:, i, :] = np.hstack([best_edges, best_dists.reshape(-1, 1)])
+            sg_no = len(subgraphs) - i
+            if sg_no % 50 == 0:
+                log_print("Processed {} subgraphs".format(sg_no))
+        np.save(matrix_name, subgraph_node_edges)
+
+    log_print("Rearrange data to make the Steiner tree")
+    # Rearrange our data for making the Steiner tree
+    tree_inds = cartesian_product(np.arange(subgraph_node_edges.shape[0]),
+                                  np.arange(subgraph_node_edges.shape[0]))
+
+    weights = subgraph_node_edges[:, :, 2]
+    edge_mask = (weights.copy() > 0).flatten()
+    edges = tree_inds[edge_mask, :]
+    edges.sort(axis=1)
+    edges = np.unique(edges, axis=0).astype(np.int64)
+
+    real_nodes = np.unique(edges)
+
+    # We can't have any gaps in our node numbering
+    nodes = np.arange(np.max(real_nodes + 1))
+    prizes = np.zeros_like(nodes)
+    prizes[real_nodes] = subgraph_lens[real_nodes]
+
+    prizes = prizes.astype(np.float64)
+    costs_indices = np.ravel_multi_index((edges[:, 0], edges[:, 1]), weights.shape)
+    costs = weights.flatten()[costs_indices].astype(np.float64)
+
+    output_nodes, output_edges = pcst_fast(edges, prizes * 10, costs, 0, 1, "gw", 1)
+    steiner_edges = edges[output_edges, :]
+    rendering_edges = subgraph_node_edges[tuple(steiner_edges[:, 0]), tuple(steiner_edges[:, 1]), :]
+    rendering_edges = rendering_edges[:, :2].astype(int)
+
+    rendering_nodes = np.unique(rendering_edges.flatten())
+    sg_nodes = [index for i in output_nodes for index in subgraphs[i]]
+    rendering_nodes = np.concatenate([rendering_nodes, sg_nodes])
+
+    edge_mask = np.isin(edges, rendering_nodes)
+    edge_mask = np.logical_or(edge_mask[:, 0], edge_mask[:, 1])
+
+    rendering_edges = np.vstack([rendering_edges, edges[edge_mask, :]])
+
+    plot_edges(rendering_edges, vertices)
+    return rendering_edges
 
 
-
-
-def link_by_distance(directory, max_distance, min_neighbors=0):
-    print("Loading skeletons, creating graphs")
+def link_by_distance(directory, max_distance, threshold, distance_metric="elliptical", min_neighbors=0,
+                     bad=False, load_from_pickle=True, **plot_params):
+    log_print("Loading skeletons, creating graphs")
     G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx = \
         get_graph_data(directory)
-    pickle_name = "distance_matrix_{}.pickle".format(directory)
-    if os.path.exists(pickle_name):
-        print("Reading distance matrix from file: {}".format(pickle_name))
+    pickle_name = "distance_matrix_{}_{}_{}.pickle".format(directory, distance_metric, max_distance)
+    if os.path.exists(pickle_name) and load_from_pickle:
+        log_print("Reading distance matrix from file: {}".format(pickle_name))
         with open(pickle_name, "rb") as fi:
-            distance_matrix, mst = pickle.load(fi)
+            distance_matrix = pickle.load(fi)
     else:
-        print("Calculating distance matrix:")
+        log_print("Calculating distance matrix:")
         nrG = G.subgraph(item for subgraph in subgraphs[1:] for item in subgraph)
 
-        print("Finding connected component leaves")
+        log_print("Enumerating end nodes")
         nr_degrees = np.array(nrG.degree())
         nr_leaf_indices = nr_degrees[nr_degrees[:, 1] == 1, 0]
 
-        indices_by_subgraph = np.array([[item, idx] for idx, subgraph in enumerate(subgraphs) for item in subgraph])
+        indices_by_subgraph = np.array(
+            [[node_idx, subgraph_idx] for subgraph_idx, subgraph in enumerate(subgraphs) for node_idx in subgraph])
         end_indices = np.concatenate([nr_leaf_indices, root_indices])
         end_indices_sub = indices_by_subgraph[np.isin(indices_by_subgraph, end_indices)[:, 0], :]
 
+        log_print("Enumerating start nodes")
+        subgraph_sizes = np.array([len(subgraph) for subgraph in subgraphs])
+        # Don't start from root nodes
+        start_nodes = end_indices_sub[end_indices_sub[:, 1] != 0]
+        # Get distances from small subgraphs first, so larger ones can overwrite them
+        start_nodes = start_nodes[np.argsort(subgraph_sizes[start_nodes[:, 1]]), :]
+        start_nodes = start_nodes[subgraph_sizes[start_nodes[:, 1]] > 5, :]
+
         distance_matrix = sparse.lil_matrix((vertices.shape[0], vertices.shape[0]))
 
-        distance_matrix[edges[:, 0], edges[:, 1]] = 10 ^ -6
+        distance_matrix[edges[:, 0], edges[:, 1]] = 10 ** -6
 
         ct = 0
+        pruned = 0
 
-        print("Finding neighbors")
+        log_print("Finding neighbors")
         # TODO: Find optimal path (according to the cost function) between all pairwise subgraphs, then optimize that
-        for leaf_idx, subgraph in end_indices_sub[end_indices_sub[:, 1] != 0, :]:
+        if bad:
+            start_nodes = end_indices_sub[end_indices_sub[:, 1] != 0, :]
+
+        for leaf_idx, subgraph in start_nodes:
             leaf = vertices[leaf_idx, :]
             _end_indices = end_indices_sub[end_indices_sub[:, 1] != subgraph, 0]
             end_verts = verts_and_idx[_end_indices, :]
@@ -350,34 +448,49 @@ def link_by_distance(directory, max_distance, min_neighbors=0):
                 _max_distance = _max_distance + 10
             leaf = leaf.reshape(1, -1)
 
-            if not BIDIRECTIONAL_DISTANCE:
+            if distance_metric == "elliptical":
                 sg_vector = subgraph_vectors[subgraph]
                 distances = get_elliptical_distance(leaf, neighbors[:, :3], alpha=0.8, vector=sg_vector)
-            else:
+
+            elif distance_metric == "bi_elliptical":
                 sg_vector = subgraph_vectors[subgraph]
-                d_vectors = subgraph_vectors[:, 3]
+                neighbor_subgraphs = indices_by_subgraph[indices_by_subgraph[:, 0] == neighbors[:, 3], 1]
+
+                d_vectors = subgraph_vectors[neighbor_subgraphs.astype(int), :]
                 distances = get_elliptical_distance_bi(leaf, neighbors[:, :3], alpha=0.8, s_vectors=sg_vector,
                                                        beta=0.8, d_vectors=d_vectors)
+            elif distance_metric == "euclidean":
+                distances = spatial.distance_matrix(leaf, neighbors[:, :3])
+            else:
+                raise ValueError("distance_metric must be one of: elliptical, bi_elliptical, euclidean")
 
             distance_matrix[leaf_idx, neighbors[:, 3].astype(int)] = distances
+            distance_matrix[neighbors[:, 3].astype(int), leaf_idx] = distances.transpose()
             ct = ct + 1
 
-        print("Calculating MST")
-        weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
-        mst = nx.minimum_spanning_tree(weighted_G)
+        if load_from_pickle:
+            log_print("Writing distance matrix: {}".format(pickle_name))
+            with open(pickle_name, "wb") as fi:
+                pickle.dump(distance_matrix, fi)
 
-        print("Writing distance matrix and MST: {}".format(pickle_name))
-        with open(pickle_name, "wb") as fi:
-            pickle.dump([distance_matrix, mst], fi)
+    threshold_mask = distance_matrix > threshold
+    pruned = np.sum(threshold_mask)
+    distance_matrix[threshold_mask] = 0
+
+    log_print("Pruned {} edges based on threshold {}".format(pruned, threshold))
+
+    log_print("Calculating MST")
+    weighted_G = nx.from_scipy_sparse_matrix(distance_matrix)
+    mst = nx.minimum_spanning_tree(weighted_G)
+
     mst_subgraphs = list(sorted(nx.connected_components(mst), key=len, reverse=True))
     root_mst = mst.subgraph(mst_subgraphs[0])
     mst_edges = np.array(root_mst.edges)
-    print("Plotting")
-    mlab.clf()
-    plot_edges(mst_edges, vertices)
+    log_print("Plotting")
+    plot_edges(mst_edges, vertices, **plot_params)
     root_edges = np.array(root_subgraph.edges)
     plot_edges(root_edges, vertices, color=(0, 0, 0), line_width=3.0)
-    mlab.show()
+    return mst_edges
 
 
 def get_graph_data(directory):
@@ -389,17 +502,63 @@ def get_graph_data(directory):
     root_indices = root_subgraph.nodes
     root_verts = vertices[root_indices, :]
     root_mean = np.mean(root_verts, axis=0).reshape((1, 3))
-    subgraph_vectors = np.array([get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs[1:]])
+    subgraph_vectors = np.array([get_subgraph_vector(subgraph, vertices, root_mean) for subgraph in nx_subgraphs])
     return G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx
+
+
+def intersect2d(A, B):
+    nrows, ncols = A.shape
+    dtype = {'names': ['f{}'.format(i) for i in range(ncols)],
+             'formats': ncols * [A.dtype]}
+
+    C = np.intersect1d(A.view(dtype), B.view(dtype))
+
+    # This last bit is optional if you're okay with "C" being a structured array...
+    C = C.view(A.dtype).reshape(-1, ncols)
+    return C
 
 
 if __name__ == "__main__":
     DIRECTORY = "brady129"
-    MAX_DISTANCE = 30
+    MAX_DISTANCE = 100
+    THRESHOLD = 30
     MIN_NEIGHBORS = 0
     BIDIRECTIONAL_DISTANCE = False
+    PICKLE_NAME = "distance_matrix_{}.pickle".format(DIRECTORY)
+    if os.path.exists(PICKLE_NAME):
+        os.unlink(PICKLE_NAME)
 
-    link_by_distance(DIRECTORY, MAX_DISTANCE, MIN_NEIGHBORS)
+    G, edges, root_indices, root_subgraph, subgraph_vectors, subgraphs, nx_subgraphs, vertices, verts_and_idx = \
+        get_graph_data(DIRECTORY)
+    MODE = "euclidean"
+    if MODE == "steiner":
+        from pcst_fast import pcst_fast  # From here: https://github.com/fraenkel-lab/pcst_fast
+        link_by_steiner(DIRECTORY)
+    else:
+        new_edges = link_by_distance(DIRECTORY, MAX_DISTANCE, THRESHOLD, distance_metric="elliptical",
+                                     min_neighbors=MIN_NEIGHBORS, load_from_pickle=True,
+                                     color=(1, 0, 0))
+        if MODE == "euclidean":
+            old_edges = link_by_distance(DIRECTORY, MAX_DISTANCE, THRESHOLD, distance_metric="euclidean",
+                                         min_neighbors=MIN_NEIGHBORS,
+                                         color=(0, 0, 1))
+        elif MODE == "elliptical_bad":
+            old_edges = link_by_distance(DIRECTORY, MAX_DISTANCE, THRESHOLD, distance_metric="elliptical",
+                                         min_neighbors=MIN_NEIGHBORS, bad=True, load_from_pickle=False,
+                                         color=(0, 0, 1))
 
-    if False:
-        os.unlink(pickle_name)
+        elif MODE == "bi_elliptical":
+            old_edges = link_by_distance(DIRECTORY, MAX_DISTANCE, THRESHOLD * 2.0, distance_metric="bi_elliptical",
+                                         min_neighbors=MIN_NEIGHBORS,
+                                         color=(0, 1, 0))
+        elif MODE == "elliptical":
+            old_edges = link_by_distance(DIRECTORY, MAX_DISTANCE, THRESHOLD, distance_metric="elliptical",
+                                         min_neighbors=MIN_NEIGHBORS, load_from_pickle=True,
+                                         color=(1, 0, 0))
+        else:
+            old_edges = np.array([])
+
+        shared_edges = intersect2d(old_edges, new_edges)
+        plot_edges(shared_edges, vertices, color=(0, 0, 0), line_width=10)
+
+    mlab.show()
